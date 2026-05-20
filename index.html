@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Woolworths Price Tracker — Top 100 Products</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f14; color: #e0e0e0; }
+.layout { display: flex; height: 100vh; }
+.chart-area { flex: 1; padding: 20px; display: flex; flex-direction: column; min-width: 0; }
+h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
+.subtitle { font-size: 0.8rem; color: #666; margin-bottom: 12px; }
+.chart-wrap { flex: 1; background: #1a1a24; border-radius: 10px; padding: 16px; position: relative; min-height: 0; }
+canvas { width: 100% !important; height: 100% !important; }
+.panel { width: 300px; flex-shrink: 0; background: #13131c; border-left: 1px solid #222; display: flex; flex-direction: column; }
+.panel-header { padding: 12px 14px 8px; border-bottom: 1px solid #222; }
+.panel-header h2 { font-size: 0.85rem; font-weight: 600; color: #aaa; margin-bottom: 8px; }
+.search-box { width: 100%; padding: 6px 10px; background: #1a1a24; border: 1px solid #333; border-radius: 6px; color: #ddd; font-size: 0.8rem; outline: none; }
+.search-box:focus { border-color: #6366f1; }
+.panel-actions { display: flex; gap: 6px; margin-top: 8px; }
+.panel-actions button { flex: 1; padding: 4px 0; background: #222; border: 1px solid #333; border-radius: 4px; color: #aaa; font-size: 0.7rem; cursor: pointer; }
+.panel-actions button:hover { background: #333; color: #fff; }
+.product-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+.product-row { display: flex; align-items: center; padding: 4px 14px; gap: 8px; cursor: pointer; position: relative; }
+.product-row:hover { background: #1a1a26; }
+.product-row input[type=checkbox] { accent-color: #6366f1; flex-shrink: 0; cursor: pointer; }
+.product-swatch { width: 12px; height: 3px; border-radius: 1px; flex-shrink: 0; }
+.product-name { font-size: 0.72rem; color: #ccc; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-freq { font-size: 0.65rem; color: #555; flex-shrink: 0; }
+.only-btn { display: none; position: absolute; right: 8px; padding: 2px 6px; background: #6366f1; border: none; border-radius: 3px; color: #fff; font-size: 0.6rem; cursor: pointer; z-index: 2; }
+.product-row:hover .only-btn { display: block; }
+.product-row:hover .product-freq { display: none; }
+.active-count { font-size: 0.7rem; color: #6366f1; padding: 6px 14px; border-top: 1px solid #222; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="chart-area">
+    <h1>Woolworths Price Tracker</h1>
+    <p class="subtitle">Top 100 most-purchased products — price history Aug 2023 – May 2026</p>
+    <div class="chart-wrap">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Products (Top 100 by frequency)</h2>
+      <input type="text" class="search-box" id="search" placeholder="Filter products...">
+      <div class="panel-actions">
+        <button id="selectAll">Select all</button>
+        <button id="deselectAll">Deselect all</button>
+        <button id="selectTop10">Top 10</button>
+      </div>
+    </div>
+    <div class="product-list" id="productList"></div>
+    <div class="active-count" id="activeCount">0 products shown</div>
+  </div>
+</div>
+
+<script>
+let PRODUCTS = [];
+let chart = null;
+let visible = new Set();
+
+const COLORS = [
+  '#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#8b5cf6','#ec4899',
+  '#f43f5e','#fb923c','#facc15','#4ade80','#22d3ee','#60a5fa','#a78bfa','#f472b6',
+  '#dc2626','#ea580c','#ca8a04','#16a34a','#0891b2','#2563eb','#7c3aed','#db2777',
+  '#b91c1c','#c2410c','#a16207','#15803d','#0e7490','#1d4ed8','#6d28d9','#be185d',
+  '#fca5a5','#fdba74','#fde047','#86efac','#67e8f9','#93c5fd','#c4b5fd','#f9a8d4',
+  '#ff6b6b','#ffa94d','#ffe066','#69db7c','#66d9e8','#748ffc','#b197fc','#faa2c1',
+  '#fa5252','#fd7e14','#fab005','#40c057','#15aabf','#4c6ef5','#7950f2','#e64980',
+  '#e03131','#e8590c','#f08c00','#2f9e44','#1098ad','#3b5bdb','#5f3dc4','#c2255c',
+  '#c92a2a','#d9480f','#e67700','#2b8a3e','#0c8599','#364fc7','#5f3dc4','#a61e4d',
+  '#ff8787','#ffc078','#ffe3a3','#8ce99a','#99e9f2','#a5b4fc','#d0bfff','#fcc2d7',
+];
+
+function getColor(rank) { return COLORS[(rank - 1) % COLORS.length]; }
+
+function buildProductList(filter) {
+  const list = document.getElementById('productList');
+  const f = (filter || '').toLowerCase();
+  list.innerHTML = PRODUCTS
+    .filter(p => !f || p.name.toLowerCase().includes(f))
+    .map(p => `<div class="product-row" data-rank="${p.rank}">
+      <input type="checkbox" ${visible.has(p.rank) ? 'checked' : ''} data-rank="${p.rank}">
+      <span class="product-swatch" style="background:${getColor(p.rank)}"></span>
+      <span class="product-name" title="${p.name}">#${p.rank} ${p.name}</span>
+      <span class="product-freq">${p.freq}x</span>
+      <button class="only-btn" data-rank="${p.rank}">only</button>
+    </div>`).join('');
+}
+
+function updateChart() {
+  const datasets = PRODUCTS.filter(p => visible.has(p.rank)).map(p => ({
+    label: p.name,
+    data: p.steps.map(s => ({ x: s[0], y: s[1] })),
+    borderColor: getColor(p.rank),
+    backgroundColor: 'transparent',
+    borderWidth: 2.5,
+    pointRadius: 0,
+    pointHitRadius: 8,
+    stepped: 'before',
+    tension: 0,
+    _freq: p.freq,
+    _rank: p.rank,
+  }));
+
+  document.getElementById('activeCount').textContent = datasets.length + ' product' + (datasets.length !== 1 ? 's' : '') + ' shown';
+
+  if (chart) {
+    chart.data.datasets = datasets;
+    chart.update('none');
+  } else {
+    chart = new Chart(document.getElementById('chart').getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: true },
+        scales: {
+          x: {
+            type: 'time',
+            time: { unit: 'month', displayFormats: { month: 'MMM yyyy' } },
+            grid: { color: '#1e1e2e' },
+            ticks: { color: '#555', maxRotation: 0, font: { size: 11 } },
+          },
+          y: {
+            title: { display: true, text: 'Price ($)', color: '#666', font: { size: 11 } },
+            grid: { color: '#1e1e2e' },
+            ticks: { color: '#666', callback: v => '$' + v.toFixed(2), font: { size: 11 } },
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1a1a28',
+            titleColor: '#fff',
+            bodyColor: '#ccc',
+            borderColor: '#333',
+            borderWidth: 1,
+            titleFont: { weight: 'bold', size: 13 },
+            callbacks: {
+              title: ctx => ctx[0] ? ctx[0].dataset.label : '',
+              label: ctx => '$' + ctx.parsed.y.toFixed(2) + ' — ' + new Date(ctx.parsed.x).toLocaleDateString('en-AU', {day:'numeric',month:'short',year:'numeric'}),
+              afterLabel: ctx => 'Rank #' + ctx.dataset._rank + ' (' + ctx.dataset._freq + 'x purchased)',
+            }
+          }
+        }
+      }
+    });
+  }
+}
+
+function setVisible(ranks) {
+  visible = new Set(ranks);
+  buildProductList(document.getElementById('search').value);
+  updateChart();
+}
+
+document.getElementById('productList').addEventListener('change', e => {
+  if (e.target.type === 'checkbox') {
+    const rank = parseInt(e.target.dataset.rank);
+    if (e.target.checked) visible.add(rank); else visible.delete(rank);
+    updateChart();
+  }
+});
+
+document.getElementById('productList').addEventListener('click', e => {
+  if (e.target.classList.contains('only-btn')) {
+    setVisible([parseInt(e.target.dataset.rank)]);
+  }
+});
+
+document.getElementById('search').addEventListener('input', e => buildProductList(e.target.value));
+
+document.getElementById('selectAll').addEventListener('click', () => {
+  const f = document.getElementById('search').value.toLowerCase();
+  setVisible(PRODUCTS.filter(p => !f || p.name.toLowerCase().includes(f)).map(p => p.rank));
+});
+
+document.getElementById('deselectAll').addEventListener('click', () => setVisible([]));
+document.getElementById('selectTop10').addEventListener('click', () => setVisible(PRODUCTS.slice(0, 10).map(p => p.rank)));
+
+// Legend hover: highlight one line, dim others
+document.getElementById('productList').addEventListener('mouseover', e => {
+  const row = e.target.closest('.product-row');
+  if (!row || !chart) return;
+  const rank = parseInt(row.dataset.rank);
+  chart.data.datasets.forEach(ds => {
+    ds.borderWidth = ds._rank === rank ? 3.5 : 1;
+    ds.borderColor = ds._rank === rank ? getColor(ds._rank) : getColor(ds._rank) + '40';
+  });
+  chart.update('none');
+});
+
+document.getElementById('productList').addEventListener('mouseleave', () => {
+  if (!chart) return;
+  chart.data.datasets.forEach(ds => {
+    ds.borderWidth = 2.5;
+    ds.borderColor = getColor(ds._rank);
+  });
+  chart.update('none');
+});
+
+fetch('price-history-top100.json').then(r => r.json()).then(d => {
+  PRODUCTS = d;
+  visible = new Set(d.slice(0, 10).map(p => p.rank));
+  buildProductList();
+  updateChart();
+});
+</script>
+</body>
+</html>
